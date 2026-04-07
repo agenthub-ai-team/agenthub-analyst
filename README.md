@@ -182,9 +182,6 @@ An AI tool with MCP support (Claude Code, Copilot CLI, or Cursor) and at least o
 **Can I use this without MCP connections?**
 Yes — the agent works with manual context too (paste code, drag files). MCP just makes it automatic.
 
-**Can I modify the agent?**
-Yes. The agent instructions are in `analyst/instructions.md` — fully transparent and editable.
-
 **Is my data safe?**
 Yes. Everything runs locally. The only external calls are MCP queries to your own tools using your own credentials. See `guides/security.md`.
 

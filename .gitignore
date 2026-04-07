@@ -1,0 +1,31 @@
+# Dependencies
+node_modules/
+.venv/
+__pycache__/
+
+# Credentials (never push real tokens)
+.env
+!config/.env
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# MCP generated configs
+.mcp.json
+.cursor/mcp.json
+
+# Output
+output/*
+!output/.gitkeep
+
+# Documentation downloads
+documentation/*
+!documentation/.gitkeep

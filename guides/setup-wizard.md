@@ -1,0 +1,209 @@
+# MCP Setup Wizard — AI Instructions
+
+> **What is this file?** This is a playbook for the AI assistant (Claude Code or Copilot CLI). When a user pastes
+> "Set up my project" (or similar), the assistant reads this file and follows
+> the steps below. Humans don't need to read this directly.
+
+---
+
+## Step 0: Detect AI Tool
+
+Before anything else, determine which AI tool is running this wizard:
+
+- **Claude Code** — detected via `CLAUDECODE` or `CLAUDE_CODE` env var, or if MCP tools are already available
+- **Copilot CLI** — detected via `COPILOT_CLI` env var, or if the user says they're using `copilot` in terminal
+
+This affects Steps 4–6 below. If uncertain, ask the user which tool they're using.
+
+---
+
+## Step 1: Run Bootstrap
+
+Run `shellscripts/setup.sh` and capture the output. This checks prerequisites, installs missing dependencies,
+creates workspace directories, and generates IDE-specific MCP config files.
+
+If `shellscripts/setup.sh` reports errors, fix them before continuing.
+
+---
+
+## Step 2: Check Credentials
+
+Read `config/.env` and scan for configured services.
+
+**Services that need credentials** (Atlassian, GitHub): A service is configured
+if its values are uncommented and don't contain placeholder text (`YOUR_`, `_HERE`, `YOURCOMPANY`, `EXAMPLE.COM`).
+
+Report what was found:
+
+> "I can see you've configured: **Atlassian, GitHub**. GitHub Enterprise is either
+> commented out or still has placeholder values."
+
+If no services are configured at all:
+
+> "Your `config/.env` still has placeholder values. Please edit it and fill in your real tokens
+> before running this wizard. See `guides/onboarding.md` for where to get each credential."
+
+Do not proceed with validation until at least one service has real values.
+
+---
+
+## Step 3: Credential Cleanup
+
+Before validating, check the configured values for common issues and fix them silently:
+
+- Trim leading/trailing whitespace from token values
+- Strip `/wiki` suffix from Atlassian URLs
+- Strip trailing `/` from all URLs
+- For Atlassian: verify that `JIRA_URL` and `CONFLUENCE_URL` match, and that `JIRA_USER`/`CONFLUENCE_USER` and `JIRA_API_TOKEN`/`CONFLUENCE_TOKEN` match (they share the same Atlassian account)
+
+If any values need correcting, use the `Edit` tool to fix them in `config/.env` and tell the user what was cleaned up.
+
+**NEVER print credentials or tokens in chat output.**
+
+---
+
+## Step 4: Install MCP Server Dependencies
+
+Some MCP servers require a specific binary or package to be installed. Check and install
+these **before** validation.
+
+**OS Detection:** Run `uname -s` to detect the OS. Use this to determine the correct install command — don't ask the user what OS they're on.
+
+### Copilot CLI — `copilot-cli` (if using Copilot CLI)
+
+If the user is running Copilot CLI:
+
+1. Check if installed: `command -v copilot`
+2. If **not installed**, detect OS and install:
+   - macOS (`Darwin`): `brew install copilot-cli`
+   - Linux (`Linux`): `curl -fsSL https://gh.io/copilot-install | bash`
+   - Windows (`MINGW`/`MSYS`): `winget install GitHub.Copilot`
+3. Check version: `copilot --version` — must be >= 1.0.14 (first version with `/mcp` support)
+4. If version is too old, upgrade using the same install method
+5. Verify MCP config was generated: `cat ~/.copilot/mcp-config.json`
+
+### GitHub → `github-mcp-server`
+
+The GitHub MCP uses the official Go binary from [github/github-mcp-server](https://github.com/github/github-mcp-server).
+The same `github-mcp-server` binary serves both github.com and GitHub Enterprise instances —
+each gets its own MCP server entry with separate credentials.
+
+GitHub Enterprise is optional. If `GITHUB_ENTERPRISE_HOST` and `GITHUB_ENTERPRISE_PAT` are not
+set in `config/.env`, only github.com is available.
+
+If GitHub credentials are configured in `config/.env`:
+
+1. Check if `github-mcp-server` is installed: `command -v github-mcp-server`
+2. If **not installed**:
+   - On macOS: run `brew install github-mcp-server`
+   - On Linux: download the binary from the [GitHub releases page](https://github.com/github/github-mcp-server/releases) and place it on `$PATH`
+   - On Windows: run `winget install GitHub.GitHubMCPServer` or download from releases
+3. If already installed, continue.
+
+### Other servers
+
+- **Atlassian**: uses `uvx mcp-atlassian` — no pre-install needed (uv downloads on first run)
+
+---
+
+## Step 5: MCP Wiring & Validation
+
+The credentials in `config/.env` are automatically connected to the MCP servers. Each server
+in `.mcp.json` calls `shellscripts/run-mcp-with-env.sh`, which reads `config/.env` and exports
+the right environment variables to the corresponding MCP server.
+
+The user does not need to edit `.mcp.json`. The wizard's job is to verify that the wiring
+works end-to-end.
+
+> **Copilot CLI note:** Copilot CLI is a **standalone terminal agent** — it is NOT the same as VS Code's Copilot Chat panel. If running under Copilot CLI, MCP servers are loaded from `~/.copilot/mcp-config.json` (generated by `setup.sh`). Instead of making live MCP calls in this step, guide the user through the following sequence:
+>
+> 1. **Open a separate terminal window** (not the VS Code integrated terminal — a standalone window gives better visibility)
+> 2. `cd` into the project directory
+> 3. Start the terminal agent: `copilot`
+> 4. Authenticate: `/login` — this opens a browser for GitHub authentication
+> 5. Verify MCP servers: `/mcp` — check that all expected servers show as connected
+> 6. Test a query: *"What Jira projects can I access?"*
+>
+> Skip the individual service validations below and go to Step 6.
+
+### Validate each configured service
+
+#### Atlassian
+- Call any Jira MCP tool (e.g., `jira_get_all_projects`) and check for a successful response.
+- Call any Confluence MCP tool (e.g., `confluence_search` with a simple query) and check for a successful response.
+- If either fails with 401/403, the token is wrong or lacks permissions. Atlassian tokens inherit user permissions — ensure the user has edit access to the project/space if write operations are needed. Regenerate token at https://id.atlassian.com/manage-profile/security/api-tokens
+
+#### GitHub
+- Call `get_me` via GitHub MCP to verify authentication.
+- If it fails, the PAT may lack required scopes — suggest `repo` (for write access), `read:org`, `read:user` (minimum for read-only).
+
+If a validation fails, offer to help the user fix the credential in `config/.env` and re-validate.
+
+---
+
+## Step 6: Post-Setup Summary
+
+Print a status table showing only the services that were configured:
+
+```
+MCP Server     Status
+─────────────  ─────────
+Atlassian      ✓ Connected (Jira + Confluence)
+GitHub         ✓ Connected as @username
+```
+
+Do not list services that are not configured.
+
+Then tell the user, depending on their AI tool:
+
+**If Claude Code:**
+
+1. **Restart your IDE / AI tool** for MCP servers to load.
+2. After restart, ask "Is my setup OK?" to verify.
+3. Try your first command: `What's the status of PROJ-123 in Jira?`
+4. See `guides/core-use-cases.md` for what you can do next.
+
+**If Copilot CLI:**
+
+> ⚠️ **Important:** Copilot CLI runs in a **standalone terminal** — not in VS Code's Copilot Chat panel.
+>
+> 💡 **Tip:** For better observability, either open a dedicated external terminal window (Terminal.app, Windows Terminal, etc.) or drag VS Code's integrated terminal tab into the **editor area** — this gives it full panel space instead of the cramped bottom strip.
+
+Walk the user through this exact sequence:
+
+1. **Open a terminal** and navigate to the workspace root (the directory where you cloned this repo)
+2. Start the agent: `copilot`
+3. Authenticate with GitHub: `/login`
+   - A one-time device code will appear. Press any key — this copies the code to your clipboard and opens `https://github.com/login/device` in your browser.
+   - Paste the device code and sign in with your GitHub account.
+   - Wait for the terminal to confirm authorization before continuing.
+4. Verify MCP servers are connected: `/mcp` — all configured servers should show as connected
+5. **Choose your model:** `/model` — select your preferred AI model (e.g. `claude-opus-4.6`)
+6. Run a test query: *"What Jira projects can I access?"*
+7. If anything still fails, re-run this wizard.
+
+> 📖 **New to Copilot CLI?** Learn what you can do, how to reference files with `@`, how to use slash commands, and more:
+> https://docs.github.com/en/copilot/how-tos/use-copilot-agents/use-copilot-cli
+
+---
+
+## Error Recovery
+
+| # | Scenario | What to do |
+|---|----------|-----------|
+| 1 | All credentials are still placeholders | Stop — tell the user to edit `config/.env` first |
+| 2 | A single service fails validation | Offer to re-enter that credential and update `config/.env` |
+| 3 | User's Atlassian URL has `/wiki` suffix | Strip it — write just the base URL |
+| 4 | User's Atlassian URL has trailing `/` | Strip it |
+| 5 | API token contains special shell characters | It's safe in `.env` — the env-loader sources the file |
+| 6 | User wants to add a service they didn't configure | Walk them through the credential, update `config/.env`, and validate |
+| 7 | `config/.env` doesn't exist | Run `git checkout config/.env` to restore it |
+| 8 | `.mcp.json` doesn't exist | Run `shellscripts/setup.sh` to regenerate it from credentials in `config/.env` |
+| 9 | MCP validation fails after fixing | Check the specific error, suggest fixes, and offer to re-enter the credential |
+| 10 | `github-mcp-server` not found | Install it: macOS `brew install github-mcp-server`, Windows `winget install GitHub.GitHubMCPServer`, Linux download from [releases](https://github.com/github/github-mcp-server/releases) |
+| 11 | `uv` or `uvx` not found | Install: `curl -LsSf https://astral.sh/uv/install.sh \| sh` |
+| 12 | Atlassian MCP returns 403 but token works in browser | Token may lack API scope — regenerate with full access |
+| 13 | `copilot-cli` not found (Copilot CLI user) | Install: `brew install copilot-cli` (macOS), `curl -fsSL https://gh.io/copilot-install \| bash` (Linux), `winget install GitHub.Copilot` (Windows) |
+| 14 | `copilot-cli` version < 1.0.14 | Upgrade — MCP support requires 1.0.14+ |
+| 15 | `~/.copilot/mcp-config.json` missing | Re-run `shellscripts/setup.sh` — it generates this from `.mcp.json` |
+| 16 | Copilot CLI MCP servers not connecting | Check `~/.copilot/mcp-config.json` has absolute paths. Re-run `shellscripts/setup.sh` to regenerate |
